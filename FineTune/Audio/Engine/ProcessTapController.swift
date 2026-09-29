@@ -1450,8 +1450,18 @@ final class ProcessTapController: ProcessTapControlling {
                 loudnessCompensatorProc.process(input: outputSamples, output: outputSamples, frameCount: frameCount)
             }
 
-            let writtenSampleCount = frameCount * outputChannels
-            SoftLimiter.processBuffer(outputSamples, sampleCount: writtenSampleCount)
+            // Keep the neutral path bit-transparent. The limiter is only needed when
+            // gain or an enabled DSP stage can create samples above unity.
+            let limiterNeeded =
+                targetVol > 1.0
+                || (eq?.isEnabled ?? false)
+                || (autoEQProc?.isEnabled ?? false)
+                || (loudnessEqualizerProc?.isEnabled ?? false)
+                || (loudnessCompensatorProc?.isEnabled ?? false)
+            if limiterNeeded {
+                let writtenSampleCount = frameCount * outputChannels
+                SoftLimiter.processBuffer(outputSamples, sampleCount: writtenSampleCount)
+            }
         }
     }
 
@@ -1533,7 +1543,10 @@ final class ProcessTapController: ProcessTapControlling {
             if totalSamplesThisBuffer == 0 {
                 totalSamplesThisBuffer = sampleCount / channels
             }
-            for i in stride(from: 0, to: sampleCount, by: channels) {
+            // Peak detection must inspect every channel. Looking only at the first
+            // sample of each interleaved frame treats hard-right audio as silence and
+            // can incorrectly keep the output gate closed (#429).
+            for i in 0..<sampleCount {
                 let absSample = abs(inputSamples[i])
                 if absSample > maxPeak { maxPeak = absSample }
             }
