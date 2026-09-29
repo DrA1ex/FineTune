@@ -1,0 +1,116 @@
+name: Build Test DMG
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      publish_release:
+        description: Publish the DMG as a GitHub prerelease
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  contents: write
+
+concurrency:
+  group: test-dmg-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test-dmg:
+    runs-on: macos-26
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Build Release app
+        run: |
+          set -euxo pipefail
+          rm -rf build
+
+          xcodebuild build \
+            -project FineTune.xcodeproj \
+            -scheme FineTune \
+            -configuration Release \
+            -derivedDataPath build/DerivedData \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO
+
+          APP_PATH="build/DerivedData/Build/Products/Release/FineTune.app"
+          test -d "$APP_PATH"
+
+          # Ad-hoc signing is enough for a local test build. It is intentionally
+          # not Developer ID signed or notarized.
+          codesign --force --deep --sign - "$APP_PATH"
+          codesign --verify --deep --strict "$APP_PATH"
+
+      - name: Create DMG
+        run: |
+          set -euxo pipefail
+
+          APP_PATH="build/DerivedData/Build/Products/Release/FineTune.app"
+          STAGING_DIR="build/dmg-root"
+          DMG_PATH="build/FineTune-test.dmg"
+
+          rm -rf "$STAGING_DIR" "$DMG_PATH"
+          mkdir -p "$STAGING_DIR"
+          ditto "$APP_PATH" "$STAGING_DIR/FineTune.app"
+          ln -s /Applications "$STAGING_DIR/Applications"
+
+          hdiutil create \
+            -volname "FineTune Test" \
+            -srcfolder "$STAGING_DIR" \
+            -ov \
+            -format UDZO \
+            "$DMG_PATH"
+
+          shasum -a 256 "$DMG_PATH" | tee build/FineTune-test.dmg.sha256
+          ls -lh "$DMG_PATH"
+
+      - name: Upload DMG artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: FineTune-test-dmg
+          path: |
+            build/FineTune-test.dmg
+            build/FineTune-test.dmg.sha256
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish GitHub prerelease
+        if: github.event_name == 'workflow_dispatch' && inputs.publish_release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euxo pipefail
+
+          SHORT_SHA="${GITHUB_SHA::7}"
+          TAG="test-${SHORT_SHA}"
+          TITLE="FineTune Test ${SHORT_SHA}"
+          DMG="build/FineTune-test.dmg"
+          CHECKSUM="build/FineTune-test.dmg.sha256"
+
+          cat > build/release-notes.md <<EOF
+          Test build from commit \`${GITHUB_SHA}\`.
+
+          This DMG is **ad-hoc signed and not notarized**. It is intended for local testing of this fork, not redistribution.
+
+          Included changes are the audio-hardening changes merged into this fork. See the repository history and merged pull requests for details.
+
+          The SHA-256 checksum is attached alongside the DMG.
+          EOF
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$DMG" "$CHECKSUM" --clobber
+          else
+            gh release create "$TAG" \
+              "$DMG" "$CHECKSUM" \
+              --target "$GITHUB_SHA" \
+              --title "$TITLE" \
+              --notes-file build/release-notes.md \
+              --prerelease
+          fi
