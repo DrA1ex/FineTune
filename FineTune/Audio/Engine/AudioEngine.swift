@@ -416,7 +416,7 @@ final class AudioEngine {
     /// processes that are actually producing output.
     var apps: [AudioApp] {
         processMonitor.activeApps
-            .filter { $0.processObjectIDs.contains { $0.readProcessIsRunning() } }
+            .filter { processMonitor.isStreaming($0) }
     }
 
     // MARK: - Displayable Apps (Active + Pinned Inactive)
@@ -1965,8 +1965,9 @@ final class AudioEngine {
 
                     // Only health-check apps that are actively streaming (isRunning=true).
                     // AudioProcessMonitor also retains silent process objects for
-                    // transition detection, so use the filtered engine view here.
-                    let isActivelyStreaming = self.apps.contains { $0.id == pid }
+                    // transition detection, so ask the monitor for live streaming state.
+                    let isActivelyStreaming = self.processMonitor.activeApps.first { $0.id == pid }
+                        .map { self.processMonitor.isStreaming($0) } ?? false
                     guard isActivelyStreaming else {
                         consecutiveMisses[pid] = 0
                         consecutiveRateMismatches[pid] = 0
