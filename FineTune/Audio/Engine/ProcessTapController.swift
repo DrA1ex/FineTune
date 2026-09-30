@@ -1210,8 +1210,14 @@ final class ProcessTapController: ProcessTapControlling {
         formatChangeSilenceFailSafeTask = nil
         _forceSilence = true
         OSMemoryBarrier()
-        // LIFE-011: Ensure _forceSilence is always cleared, even if switch throws
-        defer { _forceSilence = false; OSMemoryBarrier() }
+        // A cancelled/failed switch must never strand either silence mechanism.
+        // In particular, cancellation during the settle/ramp window used to leave
+        // _volume at 0 even after _forceSilence was cleared.
+        defer {
+            _volume = originalVolume
+            _forceSilence = false
+            OSMemoryBarrier()
+        }
         logger.info("[SWITCH-DESTROY] Enabled _forceSilence=true (sourceAlreadySilent=\(sourceAlreadySilent))")
 
         if !sourceAlreadySilent {
