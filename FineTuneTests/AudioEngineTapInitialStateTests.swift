@@ -339,6 +339,20 @@ struct AudioEngineTapInitialStateTests {
         #expect(snap.autoEQProfileID == nil)
     }
 
+    @Test("non-streaming monitor-reported app is excluded from engine apps and not tapped")
+    func silentAppIsNotTappedBeforePlayback() {
+        let fix = makeFixture()
+        fix.deviceVolume.defaultDeviceUID = fix.device.uid
+
+        // The fixture app has no running Core Audio process object. The process
+        // monitor may retain such silent apps so it can observe a later
+        // isRunning transition, but the engine must not provision a tap yet.
+        fix.engine.applyPersistedSettings()
+
+        #expect(fix.lastTap() == nil)
+        #expect(fix.engine.displayableApps.isEmpty)
+    }
+
     // MARK: Ordering / post-activation behaviour
 
     @Test("activate(initial:) is the first event the controller observes")
